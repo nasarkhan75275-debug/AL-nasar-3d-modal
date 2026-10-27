@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AL NASAR 3D MODEL - GOD'S EYE ULTIMATE</title>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/satellite.js@5/dist/satellite.min.js"></script>
+<style>
+html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden;font-family:monospace;color:#0ff}
+#topbar{position:absolute;top:0;left:0;right:0;z-index:10;background:rgba(0,20,40,0.9);border-bottom:1px solid #0ff;padding:10px;display:flex;justify-content:space-between;align-items:center}
+#panel{position:absolute;left:10px;top:60px;z-index:10;width:320px;background:rgba(0,20,40,0.9);border:1px solid #0ff;padding:10px;font-size:12px;max-height:70vh;overflow:auto}
+button{background:#001a33;color:#0ff;border:1px solid #0ff;padding:5px 10px;cursor:pointer}
+#globe{width:100%;height:100%}
+</style>
+</head>
+<body>
+<div id="topbar"><b>AL NASAR 3D MODEL • GOD'S EYE ULTIMATE</b><div><button onclick="goIndia()">🌍 INDIA</button><button onclick="location.reload()">↻ RELOAD</button></div></div>
+<div id="panel"><div id="status">Loading AL NASAR data...</div><div id="info" style="color:#fff;margin-top:8px"></div><div id="loc" style="color:#0f0;margin-top:8px"></div></div>
+<div id="globe"></div>
+<script>
+let scene,camera,renderer,earth,satGroup;
+let satData=[];
+init();
+function init(){
+ scene=new THREE.Scene();
+ camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.1,1000);
+ camera.position.set(0,30,180);
+ renderer=new THREE.WebGLRenderer({antialias:true});
+ renderer.setSize(innerWidth,innerHeight);
+ document.getElementById('globe').appendChild(renderer.domElement);
+ // Earth
+ let loader=new THREE.TextureLoader();
+ let earthTex=loader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg');
+ let geo=new THREE.SphereGeometry(50,64,64);
+ let mat=new THREE.MeshPhongMaterial({map:earthTex});
+ earth=new THREE.Mesh(geo,mat);
+ scene.add(earth);
+ satGroup=new THREE.Group(); scene.add(satGroup);
+ scene.add(new THREE.AmbientLight(0xffffff,0.6));
+ let light=new THREE.DirectionalLight(0xffffff,1); light.position.set(100,100,50); scene.add(light);
+ // stars
+ let starGeo=new THREE.BufferGeometry(); let starPos=[];
+ for(let i=0;i<2000;i++){ starPos.push((Math.random()-0.5)*2000,(Math.random()-0.5)*2000,(Math.random()-0.5)*2000); }
+ starGeo.setAttribute('position',new THREE.Float32BufferAttribute(starPos,3));
+ scene.add(new THREE.Points(starGeo,new THREE.PointsMaterial({color:0xffffff,size:1})));
+ animate(); loadSats();
+ window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+}
+function animate(){ requestAnimationFrame(animate); earth.rotation.y+=0.0005; renderer.render(scene,camera); }
+function latLonToVec(lat,lon,r){
+ let phi=(90-lat)*(Math.PI/180), theta=(lon+180)*(Math.PI/180);
+ return new THREE.Vector3(-r*Math.sin(phi)*Math.cos(theta), r*Math.cos(phi), r*Math.sin(phi)*Math.sin(theta));
+}
+async function loadSats(){
+ document.getElementById('status').innerText='Loading live satellites...';
+ try{
+  // Use CORS proxy + fallback
+  let url='https://api.allorigins.win/raw?url='+encodeURIComponent('https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=json');
+  let res=await fetch(url); let data=await res.json();
+  satData=data.slice(0,800);
+  document.getElementById('status').innerText='AL NASAR Tracked: '+satData.length+' satellites | LIVE';
+  satData.forEach(sat=>{
+   try{
+    let rec=satellite.twoline2satrec(sat.TLE_LINE1,sat.TLE_LINE2);
+    let pv=satellite.propagate(rec,new Date());
+    if(!pv.position) return;
+    let gmst=satellite.gstime(new Date());
+    let geo=satellite.eciToGeodetic(pv.position,gmst);
+    let lat=CesiumMath?0: (180/Math.PI)*geo.latitude; // fallback calc
+    lat=(geo.latitude*180/Math.PI); let lon=(geo.longitude*180/Math.PI);
+    let pos=latLonToVec(lat,lon,51+geo.height/200);
+    let dot=new THREE.Mesh(new THREE.SphereGeometry(sat.NORAD_CAT_ID==25544?1.2:0.6,8,8), new THREE.MeshBasicMaterial({color:sat.NORAD_CAT_ID==25544?0xff0000:sat.OBJECT_NAME.includes('STARLINK')?0x00ffff:0xffff00}));
+    dot.position.copy(pos); dot.userData=sat; dot.userData._lat=lat; dot.userData._lon=lon; dot.userData._alt=geo.height;
+    satGroup.add(dot);
+   }catch(e){}
+  });
+  // click
+  let ray=new THREE.Raycaster(), mouse=new THREE.Vector2();
+  renderer.domElement.addEventListener('click',async (e)=>{
+   mouse.x=(e.clientX/innerWidth)*2-1; mouse.y=-(e.clientY/innerHeight)*2+1;
+   ray.setFromCamera(mouse,camera);
+   let inter=ray.intersectObjects(satGroup.children);
+   if(inter.length>0){
+    let s=inter[0].object.userData;
+    document.getElementById('info').innerHTML=`<b style="color:cyan">${s.OBJECT_NAME}</b><br>NORAD: ${s.NORAD_CAT_ID}<br>Alt: ${s._alt.toFixed(1)} km<br>Lat: ${s._lat.toFixed(2)} Lon: ${s._lon.toFixed(2)}`;
+    // exact location name
+    document.getElementById('loc').innerText='Finding exact location name...';
+    try{
+     let r2=await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${s._lat}&lon=${s._lon}&format=json`);
+     let j=await r2.json();
+     let name=j.display_name||j.address?.country||'Over Ocean';
+     document.getElementById('loc').innerHTML=`📍 <b>Exact Location:</b><br>${name}<br><br><small>Country: ${j.address?.country||'Ocean'}<br>State: ${j.address?.state||'N/A'}</small>`;
+    }catch{ document.getElementById('loc').innerText='Over: Ocean / Space (Exact name not available)'; }
+   }
+  });
+ }catch(err){ document.getElementById('status').innerText='Error: '+err.message; }
+}
+function goIndia(){ camera.position.set(20,30,80); } 
+</script>
+</body>
+</html>
